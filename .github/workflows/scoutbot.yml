@@ -44,7 +44,7 @@ jobs:
           SENDER_EMAIL=${{ secrets.SENDER_EMAIL }}
           GMAIL_APP_PASSWORD=${{ secrets.GMAIL_APP_PASSWORD }}
           SPREADSHEET_ID=${{ secrets.SPREADSHEET_ID }}
-          FORM_SHEET_ID=${{ secrets.FORM_SHEET_ID }}
+          FORM_SHEET_ID=1dFcnVvQjWkuYhN1rplICTY0j88KgvGqQ3FzYId2ru4s
           RECIPIENT_EMAILS=${{ secrets.RECIPIENT_EMAILS }}
           GOOGLE_SERVICE_ACCOUNT_JSON=service_account.json
           EOF
