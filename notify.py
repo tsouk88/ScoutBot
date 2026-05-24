@@ -1,230 +1,457 @@
 """
-Sends an HTML email digest of the latest opportunities to all recipients.
+ScoutBot — notify.py  (SWE-List Edition)
+=========================================
 
-To stay within Gmail's per-message recipient cap and to avoid being throttled,
-recipients are sent in batches with a pause between each batch.
+Reads subscriber emails from:
+  1. Google Form responses spreadsheet (FORM_SHEET_ID)
+  2. "Subscribers" tab in the main opportunities spreadsheet
 
-Configurable via environment variables:
-    EMAIL_BATCH_SIZE       — recipients per batch (default 30)
-    EMAIL_BATCH_PAUSE_SEC  — seconds to wait between batches (default 360 = 6 min)
+Sends each subscriber ONE personally addressed email — nobody can
+see any other subscriber's address (no BCC, no CC, no group send).
 
-Each batch uses BCC so subscribers do not see each other's email addresses.
+Email design: SWE-List style — clean table, one row per opportunity,
+direct apply link, no paragraph blobs, no aggregator summaries.
+
+Staggered delivery: 600 subscribers are sent in configurable batches
+with a short sleep between each batch to avoid Gmail SMTP rate limits
+and spam triggers. Default: batches of 20, 3-second gap between batches.
 """
 
 import os
 import smtplib
-import logging
 import time
+import logging
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from datetime import datetime
+
+import gspread
+from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [notify] %(levelname)s — %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("scoutbot.notify")
 
-SENDER_EMAIL = os.getenv("SENDER_EMAIL", "")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "")
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1pLCEvDI1btjtOe1H3VgzCqpC6R0nRsEtnTwQhY6BqmU")
+# ── Config ────────────────────────────────────────────────────────────────────
+
+SENDER_EMAIL         = os.getenv("SENDER_EMAIL", "")
+GMAIL_APP_PASSWORD   = os.getenv("GMAIL_APP_PASSWORD", "")
+SPREADSHEET_ID       = os.getenv("SPREADSHEET_ID", "")
+FORM_SHEET_ID        = os.getenv("FORM_SHEET_ID", "")
 SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "service_account.json")
-
-RECIPIENT_EMAILS = [
-    e.strip().lower()
-    for e in os.getenv(
-        "RECIPIENT_EMAILS",
-        "tegazion7@gmail.com,successolamide46@gmail.com,ayanfeoluwaalalade2000@gmail.com,kamsirichard1960@gmail.com",
-    ).split(",")
-    if e.strip() and "@" in e
+FALLBACK_RECIPIENTS  = [
+    e.strip()
+    for e in os.getenv("RECIPIENT_EMAILS", "").split(",")
+    if e.strip()
 ]
-# Remove duplicates while preserving order
-_seen = set()
-RECIPIENT_EMAILS = [e for e in RECIPIENT_EMAILS if not (e in _seen or _seen.add(e))]
 
-EMAIL_BATCH_SIZE = int(os.getenv("EMAIL_BATCH_SIZE", "30"))
-EMAIL_BATCH_PAUSE_SEC = int(os.getenv("EMAIL_BATCH_PAUSE_SEC", "360"))  # 6 minutes
+# Stagger settings — tune these to stay within Gmail's limits
+# Gmail allows ~500 external recipients / 24 h on a free account.
+# With 600 subscribers, a batch size of 20 + 3 s gap finishes in ~90 s.
+BATCH_SIZE           = 20    # emails per batch
+BATCH_SLEEP_SECONDS  = 3     # seconds to sleep between batches
 
-SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit"
+SCOPES = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive",
+]
+
+# Colours — ScoutBot brand palette (professional, dark)
+COLOR_BG        = "#0d0d0d"
+COLOR_SURFACE   = "#161616"
+COLOR_CARD      = "#1e1e1e"
+COLOR_BORDER    = "#2a2a2a"
+COLOR_ACCENT    = "#f5c518"   # warm gold — like SWE list amber
+COLOR_TEXT      = "#e8e8e8"
+COLOR_MUTED     = "#888888"
+COLOR_LINK      = "#f5c518"
+COLOR_BTN_BG    = "#f5c518"
+COLOR_BTN_TEXT  = "#0d0d0d"
 
 
-def _resolve_json_path():
-    p = SERVICE_ACCOUNT_JSON
-    if not os.path.isabs(p):
-        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), p)
-    return p
+# ── Google Sheets helpers ─────────────────────────────────────────────────────
+
+def get_gspread_client():
+    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_JSON, scopes=SCOPES)
+    return gspread.authorize(creds)
 
 
-def fetch_recent_opportunities(limit=30):
+def get_opportunities(client):
+    """Read all Open rows from the main spreadsheet. Returns list of dicts."""
     try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        creds = Credentials.from_service_account_file(_resolve_json_path(), scopes=scopes)
-        client = gspread.authorize(creds)
-        sheet = client.open_by_key(SPREADSHEET_ID).sheet1
-        rows = sheet.get_all_records()
-        return rows[-limit:] if len(rows) > limit else rows
+        sh   = client.open_by_key(SPREADSHEET_ID)
+        ws   = sh.sheet1
+        rows = ws.get_all_records()
+        open_rows = [r for r in rows if str(r.get("Status", "")).strip().lower() == "open"]
+        log.info(f"Fetched {len(open_rows)} open opportunities from spreadsheet.")
+        return open_rows
     except Exception as exc:
-        logger.error(f"notify: Could not fetch sheet data: {exc}")
+        log.error(f"Could not read opportunities: {exc}")
         return []
 
 
-def build_html(opps):
-    category_colors = {
-        "Scholarship": "#1a5276",
-        "Fellowship": "#6c3483",
-        "Internship": "#117a65",
-        "Bootcamp": "#b7950b",
-        "Apprenticeship": "#784212",
-        "Conference": "#1f618d",
-        "Grant": "#145a32",
-        "VC Funding": "#7b241c",
-        "Accelerator": "#943126",
-        "Incubator": "#a04000",
-        "Pitch Competition": "#922b21",
-        "Competition": "#922b21",
-        "Award": "#7d6608",
-        "Opportunity": "#555",
-    }
+def get_subscribers(client):
+    """
+    Collect unique subscriber emails from:
+      1. Google Form responses sheet (column 'Email Address')
+      2. 'Subscribers' tab in the main sheet (column 'Email')
 
-    rows_html = ""
-    for opp in reversed(opps):
-        link = opp.get("Application Link", "#")
-        title = opp.get("Title", "Untitled")
-        cat = opp.get("Category", "Opportunity")
-        color = category_colors.get(cat, "#555")
-        badge = f'<span style="background:{color};color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;">{cat}</span>'
-        rows_html += f"""
-        <tr>
-          <td style="padding:8px 6px;border-bottom:1px solid #eee;">
-            <a href="{link}" style="color:#1a5276;font-weight:600;text-decoration:none;">{title}</a><br>
-            {badge}
-          </td>
-          <td style="padding:8px 6px;border-bottom:1px solid #eee;">{opp.get('Industry','')}</td>
-          <td style="padding:8px 6px;border-bottom:1px solid #eee;">{opp.get('Range','')}</td>
-          <td style="padding:8px 6px;border-bottom:1px solid #eee;">{opp.get('Education Level','')}</td>
-          <td style="padding:8px 6px;border-bottom:1px solid #eee;">{opp.get('Organization','')}</td>
-          <td style="padding:8px 6px;border-bottom:1px solid #eee;color:#888;">{opp.get('Deadline','')}</td>
-        </tr>"""
+    Returns a de-duplicated, lowercased list.
+    """
+    emails = set()
+
+    # Source 1: Form responses
+    try:
+        form_sh = client.open_by_key(FORM_SHEET_ID)
+        form_ws = form_sh.sheet1
+        records = form_ws.get_all_records()
+        for row in records:
+            email = (
+                row.get("Email Address")
+                or row.get("Email")
+                or row.get("email")
+                or ""
+            )
+            email = str(email).strip().lower()
+            if "@" in email:
+                emails.add(email)
+        log.info(f"Form responses: {len(emails)} emails collected.")
+    except Exception as exc:
+        log.warning(f"Could not read form responses: {exc}")
+
+    # Source 2: Subscribers tab
+    try:
+        main_sh = client.open_by_key(SPREADSHEET_ID)
+        try:
+            sub_ws = main_sh.worksheet("Subscribers")
+        except gspread.exceptions.WorksheetNotFound:
+            sub_ws = None
+
+        if sub_ws:
+            sub_records = sub_ws.get_all_records()
+            before = len(emails)
+            for row in sub_records:
+                email = str(row.get("Email", row.get("email", ""))).strip().lower()
+                if "@" in email:
+                    emails.add(email)
+            log.info(f"Subscribers tab added {len(emails) - before} additional emails.")
+    except Exception as exc:
+        log.warning(f"Could not read Subscribers tab: {exc}")
+
+    # Fallback
+    if not emails and FALLBACK_RECIPIENTS:
+        log.warning("No subscribers from sheets — using FALLBACK_RECIPIENTS from .env")
+        emails = set(e.lower() for e in FALLBACK_RECIPIENTS)
+
+    log.info(f"Total unique subscribers: {len(emails)}")
+    return sorted(emails)
+
+
+# ── Email builder ─────────────────────────────────────────────────────────────
+
+def category_badge(category: str) -> str:
+    """Return a styled HTML badge for a category string."""
+    colours = {
+        "Scholarship":      ("#1a3a5c", "#5ba4e6"),
+        "Fellowship":       ("#2a1a5c", "#9b7de8"),
+        "Internship":       ("#1a4a2a", "#5be695"),
+        "Bootcamp":         ("#4a2a1a", "#e6955b"),
+        "Grant":            ("#4a4a1a", "#e6e05b"),
+        "Accelerator":      ("#3a1a3a", "#e05be6"),
+        "Incubator":        ("#1a3a3a", "#5be6d4"),
+        "VC Funding":       ("#3a1a1a", "#e65b5b"),
+        "Pitch Competition":("#2a3a1a", "#9be65b"),
+        "Award":            ("#3a2a1a", "#e6a95b"),
+        "Apprenticeship":   ("#1a2a3a", "#5b9be6"),
+        "Conference":       ("#2a2a2a", "#b0b0b0"),
+        "Opportunity":      ("#2a2a2a", "#b0b0b0"),
+    }
+    bg, fg = colours.get(category, ("#2a2a2a", "#b0b0b0"))
+    return (
+        f'<span style="background:{bg};color:{fg};padding:2px 8px;'
+        f'border-radius:4px;font-size:11px;font-weight:600;'
+        f'text-transform:uppercase;letter-spacing:0.5px;white-space:nowrap;">'
+        f'{category}</span>'
+    )
+
+
+def range_badge(rng: str) -> str:
+    if rng.lower() == "national":
+        return (
+            '<span style="background:#0f2a0f;color:#4caf50;padding:2px 7px;'
+            'border-radius:4px;font-size:10px;font-weight:600;">🇳🇬 Nigeria</span>'
+        )
+    return (
+        '<span style="background:#1a1a2e;color:#5b9be6;padding:2px 7px;'
+        'border-radius:4px;font-size:10px;font-weight:600;">🌍 International</span>'
+    )
+
+
+def build_opportunity_row(opp: dict, idx: int) -> str:
+    """Render a single opportunity as a clean table row (SWE-List style)."""
+    title        = opp.get("Title", "Opportunity")
+    org          = opp.get("Organization", "")
+    category     = opp.get("Category", "Opportunity")
+    rng          = opp.get("Range", "International")
+    industry     = opp.get("Industry", "General")
+    edu          = opp.get("Education Level", "")
+    deadline     = opp.get("Deadline", "")
+    summary      = opp.get("Summary", "")
+    apply_link   = opp.get("Application Link", "#")
+
+    deadline_html = ""
+    if deadline:
+        deadline_html = (
+            f'<span style="color:{COLOR_MUTED};font-size:11px;">⏳ {deadline}</span>'
+        )
+
+    # Alternating row background
+    row_bg = COLOR_CARD if idx % 2 == 0 else COLOR_SURFACE
 
     return f"""
-<html>
-<head><meta charset="utf-8"></head>
-<body style="font-family:Arial,sans-serif;color:#222;max-width:900px;margin:auto;padding:20px;">
-  <div style="background:#1a5276;color:#fff;padding:20px 24px;border-radius:8px 8px 0 0;">
-    <h1 style="margin:0;font-size:22px;">ScoutBot</h1>
-    <p style="margin:4px 0 0;font-size:14px;opacity:0.85;">
-      Latest Opportunities for Nigerian Students &amp; Founders &mdash; Scholarships, Fellowships, Grants, VC, Accelerators &amp; More
-    </p>
-  </div>
-  <div style="background:#f9f9f9;padding:16px 24px;border:1px solid #ddd;border-top:none;">
-    <p style="margin:0 0 12px;">
-      Here are the <strong>{len(opps)}</strong> most recent opportunities found by ScoutBot.
-      <a href="{SHEET_URL}" style="color:#1a5276;">View the full list on Google Sheets &rarr;</a>
-    </p>
-    <table style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;">
-      <thead>
-        <tr style="background:#1a5276;color:#fff;">
-          <th style="padding:9px 7px;text-align:left;">Title &amp; Category</th>
-          <th style="padding:9px 7px;text-align:left;">Industry</th>
-          <th style="padding:9px 7px;text-align:left;">Range</th>
-          <th style="padding:9px 7px;text-align:left;">Level</th>
-          <th style="padding:9px 7px;text-align:left;">Organization</th>
-          <th style="padding:9px 7px;text-align:left;">Deadline</th>
+    <tr style="background:{row_bg};">
+      <td style="padding:14px 16px;border-bottom:1px solid {COLOR_BORDER};vertical-align:top;">
+
+        <!-- Title + org -->
+        <div style="margin-bottom:5px;">
+          <a href="{apply_link}"
+             style="color:{COLOR_TEXT};font-size:15px;font-weight:600;
+                    text-decoration:none;line-height:1.3;">
+            {title}
+          </a>
+          {f'<span style="color:{COLOR_MUTED};font-size:12px;margin-left:6px;">— {org}</span>' if org else ""}
+        </div>
+
+        <!-- Badges row -->
+        <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;align-items:center;">
+          {category_badge(category)}
+          {range_badge(rng)}
+          <span style="color:{COLOR_MUTED};font-size:11px;padding:2px 6px;
+                        background:#222;border-radius:4px;">{industry}</span>
+          {f'<span style="color:{COLOR_MUTED};font-size:11px;padding:2px 6px;background:#222;border-radius:4px;">{edu}</span>' if edu else ""}
+          {deadline_html}
+        </div>
+
+        <!-- One-line summary -->
+        {f'<p style="color:{COLOR_MUTED};font-size:13px;margin:0 0 8px 0;line-height:1.4;">{summary}</p>' if summary else ""}
+
+        <!-- Apply button -->
+        <a href="{apply_link}"
+           style="display:inline-block;background:{COLOR_BTN_BG};color:{COLOR_BTN_TEXT};
+                  padding:6px 14px;border-radius:5px;font-size:12px;font-weight:700;
+                  text-decoration:none;letter-spacing:0.3px;">
+          Apply →
+        </a>
+
+      </td>
+    </tr>
+    """
+
+
+def build_email_html(opportunities: list, recipient_email: str) -> str:
+    """Build the full HTML email body."""
+    today        = datetime.now().strftime("%B %d, %Y")
+    total        = len(opportunities)
+
+    # Group by category for section headers
+    sections     = {}
+    for opp in opportunities:
+        cat = opp.get("Category", "Opportunity")
+        sections.setdefault(cat, []).append(opp)
+
+    # Build rows grouped by category
+    rows_html = ""
+    row_idx   = 0
+    for cat, opps in sections.items():
+        # Section header row
+        rows_html += f"""
+        <tr>
+          <td style="padding:20px 16px 8px 16px;background:{COLOR_BG};
+                     border-bottom:2px solid {COLOR_ACCENT};">
+            <span style="color:{COLOR_ACCENT};font-size:12px;font-weight:700;
+                         text-transform:uppercase;letter-spacing:1px;">
+              {cat}s &nbsp;·&nbsp; {len(opps)} listing{'s' if len(opps) != 1 else ''}
+            </span>
+          </td>
         </tr>
-      </thead>
-      <tbody>{rows_html}</tbody>
-    </table>
-  </div>
-  <div style="padding:12px 24px;font-size:11px;color:#aaa;border:1px solid #ddd;border-top:none;border-radius:0 0 8px 8px;">
-    ScoutBot &mdash; Open Source |
-    <a href="https://github.com/TechHub-Extensions/ScoutBot" style="color:#aaa;">GitHub</a>
-    &mdash; You receive this because you are subscribed to ScoutBot alerts.
-  </div>
+        """
+        for opp in opps:
+            rows_html += build_opportunity_row(opp, row_idx)
+            row_idx += 1
+
+    return f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>ScoutBot Digest — {today}</title>
+</head>
+<body style="margin:0;padding:0;background:{COLOR_BG};font-family:'Helvetica Neue',Arial,sans-serif;">
+
+  <!-- Wrapper -->
+  <table width="100%" cellpadding="0" cellspacing="0"
+         style="background:{COLOR_BG};padding:24px 0;">
+  <tr><td align="center">
+  <table width="640" cellpadding="0" cellspacing="0"
+         style="max-width:640px;width:100%;">
+
+    <!-- ── Header ── -->
+    <tr>
+      <td style="background:{COLOR_SURFACE};padding:28px 24px;
+                 border-bottom:3px solid {COLOR_ACCENT};border-radius:8px 8px 0 0;">
+        <table width="100%"><tr>
+          <td>
+            <span style="color:{COLOR_ACCENT};font-size:22px;font-weight:800;
+                         letter-spacing:-0.5px;">ScoutBot</span>
+            <span style="color:{COLOR_MUTED};font-size:13px;margin-left:10px;">
+              Daily Opportunities Digest
+            </span>
+          </td>
+          <td align="right">
+            <span style="color:{COLOR_MUTED};font-size:12px;">{today}</span>
+          </td>
+        </tr></table>
+        <p style="color:{COLOR_MUTED};font-size:13px;margin:10px 0 0 0;">
+          {total} curated opportunit{'ies' if total != 1 else 'y'} across scholarships,
+          fellowships, internships, grants, and startup funding —
+          Nigeria · Africa · Global.
+        </p>
+      </td>
+    </tr>
+
+    <!-- ── Opportunities table ── -->
+    <tr>
+      <td style="background:{COLOR_BG};padding:0;">
+        <table width="100%" cellpadding="0" cellspacing="0">
+          {rows_html}
+        </table>
+      </td>
+    </tr>
+
+    <!-- ── Footer ── -->
+    <tr>
+      <td style="background:{COLOR_SURFACE};padding:24px;
+                 border-top:1px solid {COLOR_BORDER};
+                 border-radius:0 0 8px 8px;text-align:center;">
+        <p style="color:{COLOR_MUTED};font-size:12px;margin:0 0 8px 0;">
+          You are receiving this because you subscribed to ScoutBot.<br/>
+          Always verify deadlines directly on the official opportunity page before applying.
+        </p>
+        <p style="color:{COLOR_MUTED};font-size:11px;margin:0;">
+          ScoutBot is open-source and free. Built by Nigerian students for Nigerian students.<br/>
+          This email was sent only to you — your address is not shared with any other subscriber.
+        </p>
+        <p style="margin:12px 0 0 0;">
+          <a href="https://github.com/TechHub-Extensions/ScoutBot"
+             style="color:{COLOR_ACCENT};font-size:11px;text-decoration:none;">
+            GitHub ↗
+          </a>
+        </p>
+      </td>
+    </tr>
+
+  </table>
+  </td></tr>
+  </table>
+
 </body>
 </html>
-"""
+    """.strip()
 
 
-def _send_one_batch(server, html_body, subject, batch_recipients):
-    """Send one email message to a single batch using BCC."""
+# ── SMTP sender ───────────────────────────────────────────────────────────────
+
+def send_email_to(recipient: str, subject: str, html_body: str) -> bool:
+    """Send a single personally-addressed email. Returns True on success."""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = f"ScoutBot <{SENDER_EMAIL}>"
-    msg["To"] = f"ScoutBot Subscribers <{SENDER_EMAIL}>"  # generic visible "To"
-    # BCC keeps each subscriber's address private from everyone else
-    msg["Bcc"] = ", ".join(batch_recipients)
-    msg.attach(MIMEText(html_body, "html"))
+    msg["From"]    = f"ScoutBot <{SENDER_EMAIL}>"
+    msg["To"]      = recipient          # only THIS recipient's address appears here
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    server.sendmail(SENDER_EMAIL, batch_recipients, msg.as_string())
-
-
-def send_email(opps):
-    """
-    Send the digest in batches of EMAIL_BATCH_SIZE, pausing
-    EMAIL_BATCH_PAUSE_SEC between batches.
-    """
-    if not SENDER_EMAIL or not GMAIL_APP_PASSWORD:
-        logger.error("notify: SENDER_EMAIL or GMAIL_APP_PASSWORD not set.")
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(SENDER_EMAIL, GMAIL_APP_PASSWORD)
+            server.sendmail(SENDER_EMAIL, [recipient], msg.as_string())
+        return True
+    except Exception as exc:
+        log.error(f"Failed to send to {recipient}: {exc}")
         return False
 
-    if not RECIPIENT_EMAILS:
-        logger.warning("notify: No recipients configured.")
-        return False
 
-    subject = f"ScoutBot \u2014 {len(opps)} Latest Opportunities for Nigerian Students & Founders"
-    html_body = build_html(opps)
+def send_digest(opportunities: list, subscribers: list):
+    """
+    Send the daily digest to every subscriber.
 
-    batches = [
-        RECIPIENT_EMAILS[i : i + EMAIL_BATCH_SIZE]
-        for i in range(0, len(RECIPIENT_EMAILS), EMAIL_BATCH_SIZE)
-    ]
-    total_batches = len(batches)
-    logger.info(
-        f"notify: Sending to {len(RECIPIENT_EMAILS)} recipients in "
-        f"{total_batches} batches of up to {EMAIL_BATCH_SIZE} "
-        f"(pause {EMAIL_BATCH_PAUSE_SEC}s = {EMAIL_BATCH_PAUSE_SEC // 60} min between batches)."
-    )
-
-    successes = 0
-    for i, batch in enumerate(batches, start=1):
-        try:
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-                server.login(SENDER_EMAIL, GMAIL_APP_PASSWORD)
-                _send_one_batch(server, html_body, subject, batch)
-            successes += len(batch)
-            logger.info(
-                f"notify: Batch {i}/{total_batches} sent successfully "
-                f"({len(batch)} recipients)."
-            )
-        except Exception as exc:
-            logger.error(f"notify: Batch {i}/{total_batches} failed — {exc}")
-
-        # Pause between batches (but not after the last one)
-        if i < total_batches:
-            logger.info(
-                f"notify: Pausing {EMAIL_BATCH_PAUSE_SEC}s before batch {i + 1}..."
-            )
-            time.sleep(EMAIL_BATCH_PAUSE_SEC)
-
-    logger.info(
-        f"notify: Done. {successes}/{len(RECIPIENT_EMAILS)} recipients reached."
-    )
-    return successes > 0
-
-
-def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    logger.info("notify: Fetching recent opportunities...")
-    opps = fetch_recent_opportunities(limit=30)
-    if not opps:
-        logger.warning("notify: Sheet empty or unreachable. No email sent.")
+    Delivery model:
+      • Each email is individually addressed — To: contains only that
+        subscriber's own address. No CC, no BCC, no group header.
+      • Sends are staggered: BATCH_SIZE emails per batch, then
+        BATCH_SLEEP_SECONDS pause before the next batch.
+      • This keeps Gmail from triggering spam / bulk-mail filters
+        while handling ~600 recipients within a few minutes.
+    """
+    if not opportunities:
+        log.warning("No open opportunities to send. Aborting digest.")
         return
-    send_email(opps)
+
+    if not subscribers:
+        log.warning("No subscribers found. Aborting digest.")
+        return
+
+    today   = datetime.now().strftime("%B %d, %Y")
+    subject = f"ScoutBot — {len(opportunities)} Opportunities | {today}"
+    total   = len(subscribers)
+    sent    = 0
+    failed  = 0
+
+    log.info(
+        f"Starting digest: {len(opportunities)} opps → {total} subscribers "
+        f"(batches of {BATCH_SIZE}, {BATCH_SLEEP_SECONDS}s gap)"
+    )
+
+    for batch_start in range(0, total, BATCH_SIZE):
+        batch = subscribers[batch_start : batch_start + BATCH_SIZE]
+
+        for recipient in batch:
+            # Build a fresh HTML body per recipient (personalisation-ready)
+            html_body = build_email_html(opportunities, recipient)
+            ok = send_email_to(recipient, subject, html_body)
+            if ok:
+                sent += 1
+            else:
+                failed += 1
+
+        batch_end = min(batch_start + BATCH_SIZE, total)
+        log.info(
+            f"Batch {batch_start + 1}–{batch_end} / {total} sent. "
+            f"(ok={sent}, fail={failed})"
+        )
+
+        # Sleep between batches — skip after the last one
+        if batch_end < total:
+            time.sleep(BATCH_SLEEP_SECONDS)
+
+    log.info(f"Digest complete. Sent: {sent} | Failed: {failed} | Total: {total}")
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def run_notify():
+    log.info("ScoutBot notify — starting.")
+    client        = get_gspread_client()
+    opportunities = get_opportunities(client)
+    subscribers   = get_subscribers(client)
+    send_digest(opportunities, subscribers)
+    log.info("ScoutBot notify — done.")
 
 
 if __name__ == "__main__":
-    main()
+    run_notify()
