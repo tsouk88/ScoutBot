@@ -61,6 +61,70 @@ function StatusDot({ ready }) {
   );
 }
 
+// ── Premium Custom Dropdown Component ─────────────────────────────────────────
+function CustomDropdown({ value, onChange }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  const options = [
+    { id: "both", label: "Both (Undergrad & Grad/PhD)" },
+    { id: "undergrad", label: "Undergraduate & Internships Only" },
+    { id: "grad", label: "Graduate, Masters & PhD Only" },
+  ];
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const selectedOption = options.find((opt) => opt.id === value);
+
+  return (
+    <div className="custom-dropdown-container" ref={dropdownRef}>
+      <div 
+        className={`input custom-dropdown-trigger ${isOpen ? 'active' : ''}`}
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <span>{selectedOption ? selectedOption.label : "Select an option..."}</span>
+        <svg 
+          className={`dropdown-chevron ${isOpen ? 'open' : ''}`} 
+          width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+        >
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      </div>
+
+      {isOpen && (
+        <div className="custom-dropdown-menu">
+          {options.map((option) => (
+            <div
+              key={option.id}
+              className={`custom-dropdown-item ${value === option.id ? 'selected' : ''}`}
+              onClick={() => {
+                onChange(option.id);
+                setIsOpen(false);
+              }}
+            >
+              {option.label}
+              {value === option.id && (
+                <svg className="check-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function CampusLeadRegistration() {
   const [campusName, setCampusName] = useState("");
@@ -128,13 +192,11 @@ export default function CampusLeadRegistration() {
       });
       const data = await res.json();
 
-      // 🚨 NEW: Explicitly handle duplicate registrations
       if (data.duplicate) {
         setError(
           `This invite link is already registered to "${data.existing_campus}". Please provide a unique WhatsApp group link for ${campusName.trim()}.`
         );
       } 
-      // 🚨 NEW: Explicitly handle Community Announcement/Dead Links (500 Error)
       else if (!res.ok && res.status === 500) {
         setError(
           "❌ Invalid Link Format! Please ensure this is a Standard WhatsApp Group (even if restricted to Admins-only). ScoutBot cannot join Community Announcement Channels or expired links."
@@ -168,7 +230,6 @@ export default function CampusLeadRegistration() {
             </p>
           )}
           
-          {/* Footer injected into Success View */}
           <Footer />
           
         </div>
@@ -239,25 +300,16 @@ export default function CampusLeadRegistration() {
           </div>
 
           <div className="field">
-            <label htmlFor="preference" className="label">
+            <label className="label">
               What opportunities does your group need?
             </label>
-            <div className="input-wrap">
-              <select
-                id="preference"
-                value={preference}
-                onChange={(e) => setPreference(e.target.value)}
-                className="input"
-                required
-              >
-                <option value="both">Both (Undergrad & Grad/PhD)</option>
-                <option value="undergrad">Undergraduate & Internships Only</option>
-                <option value="grad">Graduate, Masters & PhD Only</option>
-              </select>
-            </div>
+            {/* 🚨 REPLACED NATIVE SELECT WITH PREMIUM COMPONENT */}
+            <CustomDropdown 
+              value={preference} 
+              onChange={setPreference} 
+            />
           </div>
 
-          {/* 🚨 UPDATED: Slightly tweaked error flexbox so long text wraps beautifully */}
           {error && (
             <div className="alert" style={{ display: 'flex', alignItems: 'flex-start', textAlign: 'left', lineHeight: '1.4' }}>
               <span className="alert-icon" style={{ marginTop: '2px' }}>⚠</span>
@@ -280,7 +332,6 @@ export default function CampusLeadRegistration() {
           </button>
         </form>
 
-        {/* Footer injected into Main View */}
         <Footer />
 
       </div>
