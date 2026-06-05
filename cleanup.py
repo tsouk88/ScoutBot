@@ -31,7 +31,7 @@ DEADLINE_COL_INDEX   = 9   # 0-based
 STATUS_COL_INDEX     = 10  # 0-based
 DATE_ADDED_COL_INDEX = 11  # 0-based — new column
 
-STALE_DAYS = 30   # entries without a deadline are removed after this many days
+STALE_DAYS = 21   # entries without a deadline are removed after 3 weeks
 
 NON_DATE_MARKERS = {
     "ongoing", "rolling", "open", "tbd", "tba",
