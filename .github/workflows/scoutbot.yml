@@ -1,18 +1,21 @@
-name: ScoutBot — Daily Scrape
+name: ScoutBot — Scrape (Every 6 Hours)
 
-# Runs the scrape + cleanup pipeline every day at 08:00 WAT (07:00 UTC).
-# Does NOT send the email digest — that runs separately on Sundays.
-# This keeps the Google Sheet fresh throughout the week.
+# Scrapes all sources and removes expired entries every 6 hours.
+# Does NOT send the email digest — that runs separately on Sundays only.
+# Running every 6 hours means new opportunities appear in the sheet
+# within 6 hours of being posted on the source site.
+#
+# 4 runs/day × ~15 min each = ~60 min/day → well within GitHub Actions free tier.
 
 on:
   schedule:
-    - cron: '0 7 * * *'    # 08:00 WAT daily
+    - cron: '0 3,9,15,21 * * *'   # 04:00, 10:00, 16:00, 22:00 WAT
   workflow_dispatch:
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
 
     steps:
       - name: Check out code
@@ -42,16 +45,19 @@ jobs:
           RECIPIENT_EMAILS=${{ secrets.RECIPIENT_EMAILS }}
           EOF
 
-      - name: Scrape new opportunities + cleanup expired rows
-        run: python run.py --scrape && python run.py --cleanup
+      - name: Scrape new opportunities
+        run: python run.py --scrape
+
+      - name: Clean expired entries (21-day rule)
+        run: python run.py --cleanup
 
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scrape-logs
+          name: scrape-logs-${{ github.run_number }}
           path: |
             scoutbot.log
             scrapy.log
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 3
