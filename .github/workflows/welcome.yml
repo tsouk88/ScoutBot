@@ -1,13 +1,12 @@
-name: ScoutBot — Welcome Email (Every 2 Days)
+name: ScoutBot — Welcome Email (Monthly)
 
-# Sends the welcome/intro email to all unique subscribers every 2 days at 8AM Lagos time.
-# Lagos is UTC+1, so 08:00 Lagos = 07:00 UTC.
-# Runs on odd days of the month (1,3,5,...) — effectively every 2 days.
-# Can also be triggered manually from the GitHub Actions tab.
+# Sends the welcome/intro email to all subscribers once per month,
+# on the 1st of each month at 09:00 WAT (08:00 UTC).
+# Reduced from every-2-days to avoid overwhelming subscribers.
 
 on:
   schedule:
-    - cron: '0 7 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31 * *'
+    - cron: '0 8 1 * *'    # 09:00 WAT on the 1st of every month
   workflow_dispatch:
 
 jobs:
@@ -45,12 +44,11 @@ jobs:
       - name: Send welcome email to all subscribers
         run: python welcome.py
 
-      - name: Upload logs as artifact (for debugging)
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: welcome-logs
-          path: |
-            scoutbot.log
+          path: scoutbot.log
           if-no-files-found: ignore
           retention-days: 7
