@@ -1,0 +1,36 @@
+name: "💡 Feature Request"
+description: "Suggest an improvement or new feature for ScoutBot."
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ScoutBot is a bot — it scrapes, updates a spreadsheet, and sends emails. 
+        Features that fit that model are welcome. Features that require a web frontend or user login are out of scope.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this feature solve?
+      description: Describe the gap or pain point
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe the feature
+      description: What should the bot do differently or additionally?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: fit
+    attributes:
+      label: Scope check
+      options:
+        - label: This feature works without a web frontend or user login
+          required: true
+        - label: This feature does not require paid APIs or services
+        - label: I am willing to contribute code for this feature
