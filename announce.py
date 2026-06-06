@@ -222,6 +222,35 @@ HTML_BODY = f"""<!DOCTYPE html>
     <strong>Your next digest arrives this Sunday.</strong>
   </p>
 
+  <!-- ── INBOX CLEANUP BOX ───────────────────────────────────────────────── -->
+  <div style="margin:24px 0;background:#fff8e1;border:1px solid #f0c040;border-radius:8px;padding:18px 20px;">
+    <p style="margin:0 0 10px;font-size:15px;font-weight:700;color:#7d5a00;">
+      🗑 Clean up your inbox — remove all old ScoutBot emails
+    </p>
+    <p style="margin:0 0 12px;font-size:13px;color:#555;line-height:1.6;">
+      Since April we sent up to 2 emails a day — that's 120+ emails sitting in your inbox.
+      You can delete them all in Gmail in three clicks:
+    </p>
+    <div style="background:#fff;border:1px solid #e0cc80;border-radius:6px;padding:12px 16px;font-size:13px;color:#333;line-height:2;">
+      <strong>Step 1.</strong> Click the button below — Gmail opens showing every ScoutBot email.<br>
+      <strong>Step 2.</strong> Tick the checkbox at the top-left to select all visible emails.<br>
+      <strong>Step 3.</strong> Click <em>"Select all X conversations that match this search"</em>.<br>
+      <strong>Step 4.</strong> Click the 🗑 <strong>Delete</strong> icon. Done.
+    </div>
+    <div style="text-align:center;margin-top:14px;">
+      <a href="{_GMAIL_SEARCH}"
+         style="display:inline-block;background:#c0392b;color:#fff;font-weight:700;
+                padding:11px 24px;border-radius:6px;text-decoration:none;font-size:14px;">
+        🗑 Open Gmail &amp; find all ScoutBot emails →
+      </a>
+    </div>
+    <p style="margin:10px 0 0;font-size:11px;color:#aaa;text-align:center;">
+      Works on Gmail desktop &amp; mobile. Link opens Gmail in your browser.<br>
+      Not using Gmail? Search your inbox for: <strong>from:kamsirichard1960@gmail.com</strong>
+    </p>
+  </div>
+  <!-- ──────────────────────────────────────────────────────────────────────── -->
+
   <p style="font-size:14px;line-height:1.8;">
     — The ScoutBot Team<br>
     <a href="{GITHUB_URL}" style="color:#1a5276;">{GITHUB_URL}</a>
@@ -230,9 +259,9 @@ HTML_BODY = f"""<!DOCTYPE html>
   <div style="margin-top:28px;padding-top:12px;border-top:1px solid #eee;font-size:12px;color:#bbb;">
     <a href="{_UNSUB_MAILTO}" style="color:#c0392b;">Unsubscribe</a>
     &nbsp;&nbsp;|&nbsp;&nbsp;
-    <a href="{_GMAIL_SEARCH}" style="color:#aaa;">🗑 Delete all ScoutBot emails in Gmail</a>
-    &nbsp;&nbsp;|&nbsp;&nbsp;
     <a href="{SHEET_URL}" style="color:#aaa;">Full spreadsheet</a>
+    &nbsp;&nbsp;|&nbsp;&nbsp;
+    <a href="{GITHUB_URL}" style="color:#aaa;">GitHub</a>
   </div>
 
 </body>
