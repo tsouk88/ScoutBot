@@ -176,9 +176,26 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide.
 
 ## Contributors
 
-Every merged contribution is permanently credited here and in [CONTRIBUTORS.md](./CONTRIBUTORS.md).
+Every merged contribution is permanently credited in [CONTRIBUTORS.md](./CONTRIBUTORS.md).
 
-[![Contributors](https://contrib.rocks/image?repo=TechHub-Extensions/ScoutBot)](https://github.com/TechHub-Extensions/ScoutBot/graphs/contributors)
+<table>
+  <tr>
+    <td align="center" width="160">
+      <a href="https://github.com/olamidefasogbon">
+        <img src="https://github.com/olamidefasogbon.png" width="64" style="border-radius:50%" /><br/>
+        <b>olamidefasogbon</b>
+      </a><br/>
+      30 PRs — WhatsApp engine,<br/>V2 frontend, link validation
+    </td>
+    <td align="center" width="160">
+      <a href="https://github.com/tsouk88">
+        <img src="https://github.com/tsouk88.png" width="64" style="border-radius:50%" /><br/>
+        <b>tsouk88</b>
+      </a><br/>
+      3 PRs — deadline fixes,<br/>new sources, Telegram module
+    </td>
+  </tr>
+</table>
 
 Want to see your face here? [Open a PR](https://github.com/TechHub-Extensions/ScoutBot/pulls) or [pick an issue](https://github.com/TechHub-Extensions/ScoutBot/issues).
 
