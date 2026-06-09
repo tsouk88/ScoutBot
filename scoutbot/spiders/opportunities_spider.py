@@ -127,6 +127,22 @@ REDDIT_OPPORTUNITY_KEYWORDS = [
     "research", "exchange", "bursary", "training",
 ]
 
+# Title must contain at least one of these to be treated as a real listing
+REDDIT_TITLE_KEYWORDS = [
+    "scholarship", "fellowship", "internship", "grant", "funded", "funding",
+    "bursary", "bootcamp", "accelerator", "exchange program", "training program",
+    "award", "stipend", "phd program", "masters program", "postdoc",
+    "fully funded", "open application", "call for applications",
+    "now open", "applications open", "apply now",
+]
+
+# Exclude posts whose titles signal advice/question threads, not listings
+REDDIT_ADVICE_WORDS = [
+    "advice", "help", "tips", "question", "experience", "opinion",
+    "lost", "confused", "struggling", "worried", "rant", "venting",
+    "should i", "am i", "will i", "how do", "is it worth",
+]
+
 
 def is_category_url(url):
     url_lower = url.lower()
@@ -478,6 +494,13 @@ class OpportunitiesSpider(scrapy.Spider):
             body = re.sub(r"\s+", " ", body).strip()
             if body in ("[removed]", "[deleted]"):
                 body = ""
+
+            title_lower = title.lower()
+            # Must look like an actual listing, not an advice/question thread
+            if not any(kw in title_lower for kw in REDDIT_TITLE_KEYWORDS):
+                continue
+            if any(w in title_lower for w in REDDIT_ADVICE_WORDS):
+                continue
 
             combined = (title + " " + body).lower()
             if not any(kw in combined for kw in REDDIT_OPPORTUNITY_KEYWORDS):
